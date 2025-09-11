@@ -32,6 +32,93 @@ async def health_check():
         "message": "HR system is running and ready to process requests"
     }
 
+@app.get("/process")
+async def process_request_get(query: str = "", message: str = "", employee_id: str = "UNKNOWN"):
+    """Process HR requests via GET method (for Allmate and other GET-based integrations)"""
+    try:
+        # Determine the message from query parameters
+        request_message = query or message
+        
+        if not request_message:
+            return JSONResponse(content={
+                "status": "error",
+                "message": "No message provided. Use ?query=your_message or ?message=your_message",
+                "example": "/process?query=I need vacation next week&employee_id=EMP123",
+                "available_endpoints": {
+                    "GET /process": "Process requests via GET with query parameters",
+                    "POST /": "Process requests via POST with JSON body",
+                    "POST /copilot": "Dedicated Copilot Studio endpoint"
+                }
+            })
+        
+        print(f"📝 GET request processing: '{request_message}' for employee: {employee_id}")
+        
+        # Process the request using the MCP server
+        result = await hr_server.process_natural_language_request({
+            "message": request_message,
+            "employee_id": employee_id
+        })
+        
+        response_text = result[0].text
+        response_data = json.loads(response_text)
+        
+        print(f"✅ GET response generated: {response_data.get('status', 'unknown')}")
+        
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        print(f"❌ Error in GET endpoint: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Error processing GET request: {str(e)}",
+                "request_message": query or message
+            }
+        )
+
+@app.get("/simple")
+async def simple_get_endpoint(q: str = ""):
+    """Simple GET endpoint for basic integrations that just need a query parameter"""
+    try:
+        if not q:
+            return JSONResponse(content={
+                "status": "error",
+                "message": "No query provided. Use ?q=your_message",
+                "example": "/simple?q=I need vacation next week"
+            })
+        
+        print(f"🔍 Simple GET request: '{q}'")
+        
+        # Process the request
+        result = await hr_server.process_natural_language_request({
+            "message": q,
+            "employee_id": "UNKNOWN"
+        })
+        
+        response_text = result[0].text
+        response_data = json.loads(response_text)
+        
+        print(f"✅ Simple response: {response_data.get('status', 'unknown')}")
+        
+        # Return a simplified response for basic integrations
+        return JSONResponse(content={
+            "result": response_data.get("message", "Request processed"),
+            "status": response_data.get("status", "unknown"),
+            "details": response_data.get("details", ""),
+            "type": response_data.get("type", "unknown")
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in simple endpoint: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Error: {str(e)}"
+            }
+        )
+
 @app.post("/")
 async def process_request_root(request: Dict[str, Any]):
     """Process HR requests sent to root endpoint (for Copilot Studio integration)"""
@@ -210,7 +297,24 @@ async def copilot_studio_endpoint(request: Dict[str, Any]):
         
         print(f"✅ Response generated: {response_data.get('status', 'unknown')}")
         
-        return JSONResponse(content=response_data)
+        # Enhance the response for Copilot Studio to make it clear what action was taken
+        enhanced_response = {
+            **response_data,
+            "copilot_response": {
+                "action_taken": True,
+                "executed": True,
+                "conversation_flow": "completed",
+                "next_step": "none" if response_data.get("status") == "success" else "retry"
+            }
+        }
+        
+        # Add a clear summary for Copilot Studio
+        if response_data.get("status") == "success":
+            enhanced_response["summary"] = f"✅ Action completed successfully: {response_data.get('message', 'Request processed')}"
+        else:
+            enhanced_response["summary"] = f"⚠️ Action encountered an issue: {response_data.get('message', 'Request could not be processed')}"
+        
+        return JSONResponse(content=enhanced_response)
         
     except Exception as e:
         print(f"❌ Error in Copilot Studio endpoint: {e}")
@@ -219,7 +323,13 @@ async def copilot_studio_endpoint(request: Dict[str, Any]):
             content={
                 "status": "error",
                 "message": f"Error processing Copilot Studio request: {str(e)}",
-                "request_received": request
+                "request_received": request,
+                "copilot_response": {
+                    "action_taken": False,
+                    "executed": False,
+                    "conversation_flow": "error",
+                    "next_step": "retry"
+                }
             }
         )
 
@@ -299,6 +409,8 @@ async def get_service_status():
         "timestamp": datetime.now().isoformat(),
         "api_endpoints": {
             "GET /": "Health check",
+            "GET /process": "Process HR requests via GET (?query=message)",
+            "GET /simple": "Simple GET endpoint (?q=message)",
             "POST /": "Process HR requests (Copilot Studio compatible)",
             "POST /copilot": "Dedicated Copilot Studio endpoint",
             "POST /process-request": "Process natural language HR requests",
@@ -322,6 +434,11 @@ async def get_service_status():
             },
             "primary_endpoint": "POST /copilot",
             "fallback_endpoint": "POST /"
+        },
+        "get_endpoints": {
+            "for_allmate": "GET /process?query=your_message",
+            "simple_get": "GET /simple?q=your_message",
+            "example": "/process?query=I need vacation next week&employee_id=EMP123"
         },
         "features": {
             "natural_language_processing": True,
